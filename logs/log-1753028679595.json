@@ -1,0 +1,27 @@
+{
+  "usuario": {
+    "id": 6310789858,
+    "is_bot": false,
+    "first_name": "Sebastián",
+    "last_name": "Leiva",
+    "language_code": "es"
+  },
+  "entrada_original": "metropolitana  san miguel, san petersburgo 6351",
+  "analisis_ia": {
+    "region": "metropolitana",
+    "comuna": "san miguel",
+    "calle": "san petersburgo",
+    "numero": "6351",
+    "torre": "",
+    "depto": ""
+  },
+  "verificarDireccion": {
+    "ok": true,
+    "region": "metropolitana",
+    "comuna": "san miguel",
+    "calle": "san petersburgo",
+    "numero": "6351",
+    "direccion": "san petersburgo 6351"
+  },
+  "timestamp": "2025-07-20T16:24:39.593Z"
+}

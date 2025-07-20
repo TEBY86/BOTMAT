@@ -1,0 +1,27 @@
+{
+  "usuario": {
+    "id": 6310789858,
+    "is_bot": false,
+    "first_name": "Sebastián",
+    "last_name": "Leiva",
+    "language_code": "es"
+  },
+  "entrada_original": "Metropolitana, San Miguel, San Petersburgo, 6351, TORRE E, 1304",
+  "analisis_ia": {
+    "region": "metropolitana",
+    "comuna": "san miguel",
+    "calle": "san petersburgo",
+    "numero": "6351",
+    "torre": "e",
+    "depto": "1304"
+  },
+  "verificarDireccion": {
+    "ok": true,
+    "region": "metropolitana",
+    "comuna": "san miguel",
+    "calle": "san petersburgo",
+    "numero": "6351",
+    "direccion": "san petersburgo 6351"
+  },
+  "timestamp": "2025-07-17T01:27:46.882Z"
+}

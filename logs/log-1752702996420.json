@@ -1,0 +1,25 @@
+{
+  "usuario": {
+    "id": 6310789858,
+    "is_bot": false,
+    "first_name": "Sebastián",
+    "last_name": "Leiva",
+    "language_code": "es"
+  },
+  "entrada_original": "Rancagua, Calle dos, 0556",
+  "analisis_ia": {
+    "region": "",
+    "comuna": "rancagua",
+    "calle": "calle dos",
+    "numero": "0556"
+  },
+  "verificarDireccion": {
+    "ok": true,
+    "region": "Libertador Bernardo O'Higgins",
+    "comuna": "rancagua",
+    "calle": "calle dos",
+    "numero": "556",
+    "direccion": "calle dos 556"
+  },
+  "timestamp": "2025-07-16T21:56:36.417Z"
+}

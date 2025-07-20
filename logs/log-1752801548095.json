@@ -1,0 +1,27 @@
+{
+  "usuario": {
+    "id": 6310789858,
+    "is_bot": false,
+    "first_name": "Sebastián",
+    "last_name": "Leiva",
+    "language_code": "es"
+  },
+  "entrada_original": "Metropolitana, Maipú, Jaime Galte, 2110, , 201",
+  "analisis_ia": {
+    "region": "metropolitana",
+    "comuna": "maipu",
+    "calle": "jaime galte",
+    "numero": "2110",
+    "torre": "",
+    "depto": "201"
+  },
+  "verificarDireccion": {
+    "ok": true,
+    "region": "Metropolitana",
+    "comuna": "maipu",
+    "calle": "jaime galte",
+    "numero": "2110",
+    "direccion": "jaime galte 2110"
+  },
+  "timestamp": "2025-07-18T01:19:08.092Z"
+}
