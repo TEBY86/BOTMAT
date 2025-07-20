@@ -46,19 +46,24 @@ async function bot2(ctx, input) {
     return await page.screenshot({ fullPage: true });
   }
 
-
-  let browser;
+let browser;
 try {
+  // 🧠 Cambia esto según tu entorno:
+  // - false → entorno local (abre navegador)
+  // - 'new' → entorno de servidor (Render, Railway, etc.)
+  const modoHeadless = 'new'; // cambia a false (sin comillas) para entorno local
+
   browser = await puppeteer.launch({
-    headless: 'false', // 🟩 No muestra ventana del navegador
+    headless: modoHeadless, // acepta 'new' o false
     slowMo: 20,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
     defaultViewport: { width: 1366, height: 900 },
   });
 
   const page = await browser.newPage();
-  await page.setUserAgent('Mozilla/5.0 (...) Chrome/123.0.0.0 Safari/537.36');
-
+  await page.setUserAgent(
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
+  );
 
 
     // --- Añadir listeners para depuración de carga de página ---
