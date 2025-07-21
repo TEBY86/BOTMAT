@@ -34,7 +34,7 @@ async function esperaInteligente(page, accion = null, timeout = 10000) {
   
   await page.waitForFunction(() => {
     return !document.querySelector('.loading, .spinner, [aria-busy="true"]');
-  }, { timeout });
+  }, { timeout }).catch(() => {});
 }
 
 async function manejarModalResultados(page, ctx) {
@@ -108,7 +108,7 @@ async function bot2(ctx, input) {
 
     try {
       await esperaInteligente(page, async () => {
-        await page.goto('https://sso-ocp4-sr-amp.apps.sr-ocp.wom.cl/auth/realms/customer-care/protocol/openid-connect/auth?client_id=e7c0d592&redirect_uri=https%3A%2F%2Fcustomercareapplicationservice.ose.wom.cl%2Fwomac%2Flogin&state=d213955b-7112-4036-b60d-a4b79940cde5&response_mode=fragment&response_type=code&scope=openid&nonce=43e8fbde-b45e-46db-843f-4482bbed44b2/', {
+        await page.goto('https://sso-ocp4-sr-amp.apps.sr-ocp.wom.cl/auth/realms/customer-care/protocol/openid-connect/auth?client_id=e7c0d592&redirect_uri=https%3A%2F%2Fcustomercareapplicationservice.ose.wom.cl%2Fwomac%2Flogin&state=d213955b-7112-4036-b60d-a4b79940cde5&response_mode=fragment&response_type=code&scope=openid&nonce=43e8fbde-b45e-46db-843f-4482bbed44b2', {
           waitUntil: 'networkidle2',
           timeout: 120000
         });
@@ -168,7 +168,7 @@ async function bot2(ctx, input) {
       const texto = await page.evaluate(el => el.textContent.trim(), opcion);
       if (texto.toUpperCase().includes(calle.toUpperCase()) && texto.toUpperCase().includes(numero.toUpperCase())) {
         await ctx.reply(`🟢 Dirección encontrada: ${texto}`);
-        await opcion.scrollIntoView();
+        await opcion.scrollIntoView({ block: 'center', behavior: 'smooth' });
         await esperaInteligente(page, async () => {
           await opcion.click();
         });
@@ -205,6 +205,7 @@ async function bot2(ctx, input) {
     await esperaInteligente(page, async () => {
       await lupa.click();
     });
+    await page.waitForTimeout(2000); // Espera adicional para que cargue el segundo desplegable
 
     // Manejo de torre/depto si existen
     if (torre || depto) {
@@ -212,11 +213,20 @@ async function bot2(ctx, input) {
         const panelTorreDepto = await encontrarElemento(page, [
           'div.drop_down',
           'div.torre-depto-panel',
-          'div.extra-options'
-        ], 10000);
+          'div.extra-options',
+          'select.torre-depto',
+          'ul.dropdown-menu',
+          'div.select-container',
+          '[role="listbox"]'
+        ], 15000); // Timeout aumentado a 15000 ms
+
+        await page.evaluate((panel) => {
+          panel.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }, panelTorreDepto);
+        await page.waitForTimeout(500); // Espera para asegurar visibilidad
 
         const opcionesExtra = await page.evaluate(() => {
-          return Array.from(document.querySelectorAll('div.drop_down .item-content, div.torre-depto-panel div.option')).map(el => el.textContent.trim()).filter(Boolean);
+          return Array.from(document.querySelectorAll('div.drop_down .item-content, div.torre-depto-panel div.option, select.torre-depto option, ul.dropdown-menu li, div.select-container div, [role="option"]')).map(el => el.textContent.trim()).filter(Boolean);
         });
 
         if (opcionesExtra.length > 0) {
@@ -231,7 +241,7 @@ async function bot2(ctx, input) {
         const deptoNumero = depto;
         let torreDeptoSeleccionada = false;
 
-        for (const opcion of await page.$$('div.drop_down .item-content, div.torre-depto-panel div.option')) {
+        for (const opcion of await page.$$('div.drop_down .item-content, div.torre-depto-panel div.option, select.torre-depto option, ul.dropdown-menu li, div.select-container div, [role="option"]')) {
           const texto = await page.evaluate(el => el.textContent.trim(), opcion);
           const textoUpper = texto.toUpperCase();
 
@@ -245,16 +255,18 @@ async function bot2(ctx, input) {
 
           if (coincideTorre && coincideDepto) {
             await ctx.reply(`🏢 Seleccionando torre/depto: ${texto}`);
-            await esperaInteligente(page, async () => {
-              await opcion.click();
-            });
+            await page.evaluate((el) => {
+              el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+              el.click();
+            }, opcion);
+            await page.waitForTimeout(1000); // Espera para confirmar selección
             torreDeptoSeleccionada = true;
             break;
           }
         }
 
         if (!torreDeptoSeleccionada && opcionesExtra.length > 0) {
-          const primeraOpcion = await page.$('div.drop_down .item-content, div.torre-depto-panel div.option');
+          const primeraOpcion = await page.$('div.drop_down .item-content, div.torre-depto-panel div.option, select.torre-depto option, ul.dropdown-menu li, div.select-container div, [role="option"]');
           if (primeraOpcion) {
             const texto = await page.evaluate(el => el.textContent.trim(), primeraOpcion);
             if (contieneDepartamento(texto)) {
@@ -269,11 +281,17 @@ async function bot2(ctx, input) {
         if (!torreDeptoSeleccionada) {
           log('⚠️ No se pudo seleccionar torre/depto');
           await ctx.reply('⚠️ No se pudo seleccionar torre/depto automáticamente');
+          const buffer = await page.screenshot({ fullPage: true });
+          await ctx.replyWithPhoto({ source: buffer, caption: 'Estado del DOM tras intentar cargar el panel de torre/depto' });
         }
       } catch (e) {
         log(`⚠️ Panel de torre/depto no apareció: ${e.message}`);
         await ctx.reply('⚠️ No se detectó panel de torre/depto');
+        const buffer = await page.screenshot({ fullPage: true });
+        await ctx.replyWithPhoto({ source: buffer, caption: 'Estado del DOM tras intentar cargar el panel de torre/depto' });
       }
+    } else {
+      log('No se proporcionaron torre ni depto, continuando con el modal de resultados');
     }
 
     // Manejo del modal de resultados
