@@ -5,42 +5,37 @@ require('dotenv').config();
 puppeteer.use(StealthPlugin());
 
 function contieneDepartamento(texto) {
-  const palabrasClave = ['TORRE', 'DEPTO', 'PISO', 'CASA', 'BLOCK', 'EDIFICIO', 'A', 'B', 'C', 'D', 'E', 'F', '1', '2', '3', '4', '5', '6'];
-  return palabrasClave.some(palabra => texto.toUpperCase().includes(palabra));
+  const claves = ['TORRE', 'DEPTO', 'PISO', 'CASA', 'BLOCK', 'EDIFICIO', 'A', 'B', 'C', 'D', 'E', 'F', '1', '2', '3', '4', '5', '6'];
+  return claves.some(clave => texto.toUpperCase().includes(clave));
 }
 
-async function encontrarElemento(page, selectores, tiempoEspera = 5000) {
+async function encontrarElemento(page, selectores, timeout = 5000) {
   for (const selector of selectores) {
     try {
       const elemento = await page.waitForSelector(selector, { 
         visible: true, 
-        timeout: tiempoEspera 
+        timeout 
       });
       if (elemento) return elemento;
     } catch (e) {
       continue;
     }
   }
-  throw new Error(`No se encontró el elemento con los selectores: ${selectores.join(', ')}`);
+  throw new Error(`No se pudo encontrar el elemento con selectores: ${selectores.join(', ')}`);
 }
 
-async function esperaInteligente(page, accion = null, tiempoEspera = 10000) {
+async function esperaInteligente(page, accion = null, timeout = 10000) {
   if (accion) {
     await Promise.all([
-      page.waitForNavigation({ 
-        waitUntil: ['networkidle2', 'domcontentloaded'], 
-        timeout: tiempoEspera 
-      }),
-      page.waitForFunction(() => document.readyState === 'complete', { 
-        timeout: tiempoEspera 
-      }),
+      page.waitForNavigation({ waitUntil: ['networkidle2', 'domcontentloaded'], timeout }),
+      page.waitForFunction(() => document.readyState === 'complete', { timeout }),
       accion()
     ]).catch(() => {});
   }
   
   await page.waitForFunction(() => {
     return !document.querySelector('.loading, .spinner, [aria-busy="true"]');
-  }, { timeout: tiempoEspera });
+  }, { timeout });
 }
 
 async function manejarModalResultados(page, ctx) {
@@ -57,9 +52,9 @@ async function manejarModalResultados(page, ctx) {
       'div.result-container'
     ], 15000);
 
+    // SOLUCIÓN AL ERROR: Eliminar el parámetro quality para PNG
     const buffer = await modal.screenshot({ 
-      clip: await modal.boundingBox(),
-      quality: 90
+      clip: await modal.boundingBox() // Captura sólo el área del modal
     });
     
     await ctx.replyWithPhoto({ source: buffer });
@@ -71,13 +66,13 @@ async function manejarModalResultados(page, ctx) {
 }
 
 async function bot2(ctx, input) {
-  const registrarLog = (mensaje) => console.log(`[${new Date().toISOString()}] ${mensaje}`);
+  const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
   
   const [region, comuna, calle, numero, torre, depto] = input.split(',').map(x => x.trim());
 
-  registrarLog(`Entrada recibida: "${input}"`);
-  registrarLog(`Región: "${region}", Comuna: "${comuna}", Calle: "${calle}", Número: "${numero}"`);
-  registrarLog(`Torre: "${torre}", Depto: "${depto}"`);
+  log(`Input recibido: "${input}"`);
+  log(`Región: "${region}", Comuna: "${comuna}", Calle: "${calle}", Número: "${numero}"`);
+  log(`Torre: "${torre}", Depto: "${depto}"`);
 
   if (!region || !comuna || !calle || !numero) {
     return ctx.reply('❗ Formato incorrecto. Usa: /factibilidad Región, Comuna, Calle, Número[, Torre[, Depto]]');
@@ -85,66 +80,66 @@ async function bot2(ctx, input) {
 
   ctx.reply('🔍 Consultando factibilidad técnica en MAT de WOM, un momento...');
 
-  let navegador;
+  let browser;
   try {
-    const modoSinHead = 'new';
-    navegador = await puppeteer.launch({
-      headless: modoSinHead,
+    const modoHeadless = 'new';
+    browser = await puppeteer.launch({
+      headless: modoHeadless,
       slowMo: 20,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
       defaultViewport: { width: 1366, height: 900 },
     });
 
-    const pagina = await navegador.newPage();
-    await pagina.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+    const page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-    pagina.on('console', msg => registrarLog(`[CONSOLA] ${msg.text()}`));
-    pagina.on('pageerror', error => registrarLog(`[ERROR] ${error.message}`));
-    pagina.on('response', respuesta => registrarLog(`[RESPUESTA] ${respuesta.status()} ${respuesta.url()}`));
+    page.on('console', msg => log(`[CONSOLE] ${msg.text()}`));
+    page.on('pageerror', error => log(`[ERROR] ${error.message}`));
+    page.on('response', response => log(`[RESPONSE] ${response.status()} ${response.url()}`));
 
     try {
-      await esperaInteligente(pagina, async () => {
-        await pagina.goto('https://sso-ocp4-sr-amp.apps.sr-ocp.wom.cl/auth/realms/customer-care/protocol/openid-connect/auth?client_id=e7c0d592&redirect_uri=https%3A%2F%2Fcustomercareapplicationservice.ose.wom.cl%2Fwomac%2Flogin&state=d213955b-7112-4036-b60d-a4b79940cde5&response_mode=fragment&response_type=code&scope=openid&nonce=43e8fbde-b45e-46db-843f-4482bbed44b2/', { 
+      await esperaInteligente(page, async () => {
+        await page.goto('https://sso-ocp4-sr-amp.apps.sr-ocp.wom.cl/auth/realms/customer-care/protocol/openid-connect/auth?client_id=e7c0d592&redirect_uri=https%3A%2F%2Fcustomercareapplicationservice.ose.wom.cl%2Fwomac%2Flogin&state=d213955b-7112-4036-b60d-a4b79940cde5&response_mode=fragment&response_type=code&scope=openid&nonce=43e8fbde-b45e-46db-843f-4482bbed44b2/', { 
           waitUntil: 'networkidle2', 
           timeout: 120000 
         });
       });
-      registrarLog('✅ Página de login cargada');
+      log('✅ Página de login cargada');
     } catch (error) {
-      registrarLog(`❌ Error navegación inicial: ${error.message}`);
-      const buffer = await pagina.screenshot({ fullPage: true });
+      log(`❌ Error navegación inicial: ${error.message}`);
+      const buffer = await page.screenshot({ fullPage: true });
       await ctx.replyWithPhoto({ source: buffer, caption: 'Error al cargar página inicial' });
       throw error;
     }
 
-    await pagina.type('#username', process.env.WOM_USER);
-    await pagina.type('#password', process.env.WOM_PASS);
-    await esperaInteligente(pagina, async () => {
-      await pagina.click('#kc-login');
+    await page.type('#username', process.env.WOM_USER);
+    await page.type('#password', process.env.WOM_PASS);
+    await esperaInteligente(page, async () => {
+      await page.click('#kc-login');
     });
-    registrarLog('✅ Credenciales ingresadas');
+    log('✅ Credenciales ingresadas');
 
-    await encontrarElemento(pagina, ['#Button_Opcion_Top_Fact_Tec'], 10000);
-    await esperaInteligente(pagina, async () => {
-      await pagina.click('#Button_Opcion_Top_Fact_Tec');
+    await encontrarElemento(page, ['#Button_Opcion_Top_Fact_Tec'], 10000);
+    await esperaInteligente(page, async () => {
+      await page.click('#Button_Opcion_Top_Fact_Tec');
     });
     await ctx.reply('✅ Entramos a la sección "Factibilidad Técnica"...');
 
-    const inputDireccion = await encontrarElemento(pagina, ['input#direccion'], 8000);
+    const inputDireccion = await encontrarElemento(page, ['input#direccion'], 8000);
     await inputDireccion.click({ clickCount: 3 });
     await inputDireccion.press('Backspace');
-    await pagina.waitForTimeout(500);
+    await page.waitForTimeout(500);
 
     const calleFormateada = region.trim().toUpperCase() === "LIBERTADOR BERNARDO O'HIGGINS"
       ? calle.replace(/LIBERTADOR BERNARDO O['']HIGGINS/gi, 'LIB GRAL BERNARDO O HIGGINS')
       : calle;
 
     await inputDireccion.type(`${calleFormateada} ${numero}`, { delay: 100 });
-    await pagina.waitForTimeout(2000);
+    await page.waitForTimeout(2000);
     await inputDireccion.press('Backspace');
-    await pagina.waitForTimeout(1500);
+    await page.waitForTimeout(1500);
 
-    const opcionesVisibles = await pagina.evaluate(() => {
+    const opcionesVisibles = await page.evaluate(() => {
       return Array.from(document.querySelectorAll('ul.opciones li')).map(el => el.textContent.trim()).filter(Boolean);
     });
 
@@ -154,16 +149,16 @@ async function bot2(ctx, input) {
       await ctx.reply('⚠️ No se detectaron opciones visibles en el desplegable.');
     }
 
-    const posiblesOpciones = await pagina.$x(`//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚ', 'abcdefghijklmnopqrstuvwxyzáéíóú'), '${(calleFormateada + ' ' + numero).toLowerCase()}')]`);
+    const posiblesOpciones = await page.$x(`//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚ', 'abcdefghijklmnopqrstuvwxyzáéíóú'), '${(calleFormateada + ' ' + numero).toLowerCase()}')]`);
     await ctx.reply(`🔍 Opciones encontradas: ${posiblesOpciones.length}`);
 
     let seleccionada = false;
     for (const opcion of posiblesOpciones) {
-      const texto = await pagina.evaluate(el => el.textContent.trim(), opcion);
+      const texto = await page.evaluate(el => el.textContent.trim(), opcion);
       if (texto.toUpperCase().includes(calle.toUpperCase()) && texto.toUpperCase().includes(numero.toUpperCase())) {
         await ctx.reply(`🟢 Dirección encontrada: ${texto}`);
         await opcion.scrollIntoView();
-        await esperaInteligente(pagina, async () => {
+        await esperaInteligente(page, async () => {
           await opcion.click();
         });
         seleccionada = true;
@@ -175,39 +170,40 @@ async function bot2(ctx, input) {
       throw new Error('No se pudo seleccionar la dirección');
     }
 
-    const lupa = await encontrarElemento(pagina, [
+    const lupa = await encontrarElemento(page, [
       'label.input_icon--left.icono-lupa',
       'button[aria-label="Buscar"]',
       'div.search-icon'
     ], 8000);
 
     await ctx.reply('🔎 Confirmando la dirección con clic en la lupa...');
-    await esperaInteligente(pagina, async () => {
+    await esperaInteligente(page, async () => {
       await lupa.click();
     });
 
+    // MANEJO DE TORRE/DEPTO (PARTE QUE FALTABA)
     if (torre || depto) {
       try {
-        const panelTorreDepto = await encontrarElemento(pagina, [
+        const panelTorreDepto = await encontrarElemento(page, [
           'div.drop_down',
           'div.torre-depto-panel',
           'div.extra-options'
         ], 10000);
 
-        const opcionesExtra = await pagina.evaluate(() => {
+        const opcionesExtra = await page.evaluate(() => {
           return Array.from(document.querySelectorAll('div.drop_down .item-content, div.torre-depto-panel div.option')).map(el => el.textContent.trim()).filter(Boolean);
         });
 
         if (opcionesExtra.length > 0) {
-          registrarLog('Opciones torre/depto disponibles:');
-          opcionesExtra.forEach((texto, idx) => registrarLog(`${idx + 1}. ${texto}`));
+          log('Opciones torre/depto disponibles:');
+          opcionesExtra.forEach((texto, idx) => log(`${idx + 1}. ${texto}`));
         }
 
         const torreLetra = torre?.split(' ').pop()?.toUpperCase();
         const deptoNumero = depto;
 
-        for (const opcion of await pagina.$$('div.drop_down .item-content, div.torre-depto-panel div.option')) {
-          const texto = await pagina.evaluate(el => el.textContent.trim(), opcion);
+        for (const opcion of await page.$$('div.drop_down .item-content, div.torre-depto-panel div.option')) {
+          const texto = await page.evaluate(el => el.textContent.trim(), opcion);
           const textoUpper = texto.toUpperCase();
 
           const coincideTorre = torreLetra 
@@ -220,35 +216,35 @@ async function bot2(ctx, input) {
 
           if ((!torreLetra || coincideTorre) && (!deptoNumero || coincideDepto)) {
             await ctx.reply(`🏢 Seleccionando torre/depto: ${texto}`);
-            await esperaInteligente(pagina, async () => {
+            await esperaInteligente(page, async () => {
               await opcion.click();
             });
             break;
           }
         }
       } catch (e) {
-        registrarLog(`⚠️ Panel de torre/depto no apareció: ${e.message}`);
+        log(`⚠️ Panel de torre/depto no apareció: ${e.message}`);
       }
     }
 
-    const resultadoModal = await manejarModalResultados(pagina, ctx);
+    const resultadoModal = await manejarModalResultados(page, ctx);
     if (!resultadoModal) {
       await ctx.reply('⚠️ No se pudo obtener el modal de resultados, mostrando captura completa...');
-      const buffer = await pagina.screenshot({ fullPage: true });
+      const buffer = await page.screenshot({ fullPage: true });
       await ctx.replyWithPhoto({ source: buffer });
     }
 
     await ctx.reply('✅ Proceso completado');
 
   } catch (error) {
-    registrarLog(`❌ Error general: ${error.message}`);
+    log(`❌ Error general: ${error.message}`);
     await ctx.reply(`⚠️ Error: ${error.message}`);
-    if (navegador) {
-      const buffer = await pagina.screenshot({ fullPage: true });
+    if (browser) {
+      const buffer = await page.screenshot({ fullPage: true });
       await ctx.replyWithPhoto({ source: buffer, caption: 'Estado al ocurrir el error' });
     }
   } finally {
-    if (navegador) await navegador.close();
+    if (browser) await browser.close();
   }
 }
 
