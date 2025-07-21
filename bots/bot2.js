@@ -1,349 +1,255 @@
-const puppeteer = require('puppeteer-extra'); // Importa Puppeteer con soporte para plugins
-const StealthPlugin = require('puppeteer-extra-plugin-stealth'); // Plugin para evitar detección como bot
-require('dotenv').config(); // Carga variables de entorno desde .env
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+require('dotenv').config();
 
-
-puppeteer.use(StealthPlugin()); // Aplica el plugin de stealth para evitar bloqueos en el sitio
-
+puppeteer.use(StealthPlugin());
 
 function contieneDepartamento(texto) {
-  const claves = ['TORRE', 'DEPTO', 'PISO', 'CASA', 'BLOCK', 'EDIFICIO', 'A', 'B', 'C', 'D', 'E', 'F', '1', '2', '3', '4', '5', '6'];
-  return claves.some(clave => texto.toUpperCase().includes(clave));
+  const palabrasClave = ['TORRE', 'DEPTO', 'PISO', 'CASA', 'BLOCK', 'EDIFICIO', 'A', 'B', 'C', 'D', 'E', 'F', '1', '2', '3', '4', '5', '6'];
+  return palabrasClave.some(palabra => texto.toUpperCase().includes(palabra));
 }
 
+async function encontrarElemento(page, selectores, tiempoEspera = 5000) {
+  for (const selector of selectores) {
+    try {
+      const elemento = await page.waitForSelector(selector, { 
+        visible: true, 
+        timeout: tiempoEspera 
+      });
+      if (elemento) return elemento;
+    } catch (e) {
+      continue;
+    }
+  }
+  throw new Error(`No se encontró el elemento con los selectores: ${selectores.join(', ')}`);
+}
+
+async function esperaInteligente(page, accion = null, tiempoEspera = 10000) {
+  if (accion) {
+    await Promise.all([
+      page.waitForNavigation({ 
+        waitUntil: ['networkidle2', 'domcontentloaded'], 
+        timeout: tiempoEspera 
+      }),
+      page.waitForFunction(() => document.readyState === 'complete', { 
+        timeout: tiempoEspera 
+      }),
+      accion()
+    ]).catch(() => {});
+  }
+  
+  await page.waitForFunction(() => {
+    return !document.querySelector('.loading, .spinner, [aria-busy="true"]');
+  }, { timeout: tiempoEspera });
+}
+
+async function manejarModalResultados(page, ctx) {
+  try {
+    await page.waitForFunction(() => {
+      const loaders = document.querySelectorAll('.loader, .spinner, .loading');
+      return Array.from(loaders).every(loader => loader.style.display === 'none');
+    }, { timeout: 10000 });
+
+    const modal = await encontrarElemento(page, [
+      'section.modal_cnt.container-row',
+      'div[role="dialog"]',
+      'div.modal-content',
+      'div.result-container'
+    ], 15000);
+
+    const buffer = await modal.screenshot({ 
+      clip: await modal.boundingBox(),
+      quality: 90
+    });
+    
+    await ctx.replyWithPhoto({ source: buffer });
+    return true;
+  } catch (error) {
+    console.error('Error al manejar modal:', error);
+    return false;
+  }
+}
 
 async function bot2(ctx, input) {
-  // ¡IMPORTANTE! La declaración de 'log' DEBE estar al principio de la función bot2
-  const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
-
-
+  const registrarLog = (mensaje) => console.log(`[${new Date().toISOString()}] ${mensaje}`);
+  
   const [region, comuna, calle, numero, torre, depto] = input.split(',').map(x => x.trim());
 
-
-  // --- DEBUG LOGS: Valores de entrada ---
-  log(`DEBUG: Input recibido: "${input}"`);
-  log(`DEBUG: Región: "${region}", Comuna: "${comuna}", Calle: "${calle}", Número: "${numero}"`);
-  log(`DEBUG: Torre: "${torre}", Depto: "${depto}"`);
-  // --- FIN DEBUG LOGS ---
-
+  registrarLog(`Entrada recibida: "${input}"`);
+  registrarLog(`Región: "${region}", Comuna: "${comuna}", Calle: "${calle}", Número: "${numero}"`);
+  registrarLog(`Torre: "${torre}", Depto: "${depto}"`);
 
   if (!region || !comuna || !calle || !numero) {
     return ctx.reply('❗ Formato incorrecto. Usa: /factibilidad Región, Comuna, Calle, Número[, Torre[, Depto]]');
   }
 
-
   ctx.reply('🔍 Consultando factibilidad técnica en MAT de WOM, un momento...');
 
+  let navegador;
+  try {
+    const modoSinHead = 'new';
+    navegador = await puppeteer.launch({
+      headless: modoSinHead,
+      slowMo: 20,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+      defaultViewport: { width: 1366, height: 900 },
+    });
 
-  async function tomarCapturaBuffer(page) {
-    await page.waitForTimeout(2000);
-    const lupa = await page.$('label.input_icon--left.icono-lupa');
-    if (lupa) {
-      await ctx.reply('🔎 Haciendo clic en la lupa para confirmar selección...');
-      await lupa.click();
-      await page.waitForTimeout(6000);
-    }
-    return await page.screenshot({ fullPage: true });
-  }
+    const pagina = await navegador.newPage();
+    await pagina.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-let browser;
-try {
-  // 🧠 Cambia esto según tu entorno:
-  // - false → entorno local (abre navegador)
-  // - 'new' → entorno de servidor (Render, Railway, etc.)
-  const modoHeadless = 'new'; // cambia a false (sin comillas) para entorno local
-
-  browser = await puppeteer.launch({
-    headless: modoHeadless, // acepta 'new' o false
-    slowMo: 20,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    defaultViewport: { width: 1366, height: 900 },
-  });
-
-  const page = await browser.newPage();
-  await page.setUserAgent(
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
-  );
-
-
-    // --- Añadir listeners para depuración de carga de página ---
-    page.on('console', (msg) => log(`[PAGE CONSOLE] ${msg.type().toUpperCase()}: ${msg.text()}`));
-    page.on('pageerror', (err) => log(`[PAGE ERROR] ${err.message}`));
-    page.on('response', (response) => log(`[PAGE RESPONSE] URL: ${response.url()} | Status: ${response.status()}`));
-    page.on('error', (err) => log(`[BROWSER ERROR] ${err.message}`));
-    // --- Fin de listeners ---
-
+    pagina.on('console', msg => registrarLog(`[CONSOLA] ${msg.text()}`));
+    pagina.on('pageerror', error => registrarLog(`[ERROR] ${error.message}`));
+    pagina.on('response', respuesta => registrarLog(`[RESPUESTA] ${respuesta.status()} ${respuesta.url()}`));
 
     try {
-      const response = await page.goto('https://sso-ocp4-sr-amp.apps.sr-ocp.wom.cl/auth/realms/customer-care/protocol/openid-connect/auth?client_id=e7c0d592&redirect_uri=https%3A%2F%2Fcustomercareapplicationservice.ose.wom.cl%2Fwomac%2Flogin&state=d213955b-7112-4036-b60d-a4b79940cde5&response_mode=fragment&response_type=code&scope=openid&nonce=43e8fbde-b45e-46db-843f-4482bbed44b2/', { waitUntil: 'load', timeout: 120000 });
-      log('✅ Navegando a la página de inicio de sesión de WOM.');
-      if (response) {
-        log(`DEBUG: Estado de la respuesta de navegación: ${response.status()} - ${response.url()}`);
-      } else {
-        log('DEBUG: La navegación no devolvió una respuesta (posiblemente caché o error de red muy temprano).');
-      }
-    } catch (navigationError) {
-      log(`❌ ERROR DE NAVEGACIÓN: No se pudo cargar la página de WOM. Detalles: ${navigationError.message}`);
-      await ctx.reply('❌ Error al cargar la página de WOM. Por favor, verifica la URL o tu conexión a internet.');
-      try {
-        const errorScreenshotBuffer = await page.screenshot({ fullPage: true });
-        await ctx.replyWithPhoto({ source: errorScreenshotBuffer }, { caption: 'Captura de pantalla al fallar la navegación inicial.' });
-        log('✅ Captura de pantalla tomada al fallar la navegación inicial.');
-      } catch (screenshotError) {
-        log(`⚠️ No se pudo tomar captura de pantalla al fallar la navegación: ${screenshotError.message}`);
-      }
-      if (browser) await browser.close();
-      return;
+      await esperaInteligente(pagina, async () => {
+        await pagina.goto('https://sso-ocp4-sr-amp.apps.sr-ocp.wom.cl/auth/realms/customer-care/protocol/openid-connect/auth?client_id=e7c0d592&redirect_uri=https%3A%2F%2Fcustomercareapplicationservice.ose.wom.cl%2Fwomac%2Flogin&state=d213955b-7112-4036-b60d-a4b79940cde5&response_mode=fragment&response_type=code&scope=openid&nonce=43e8fbde-b45e-46db-843f-4482bbed44b2/', { 
+          waitUntil: 'networkidle2', 
+          timeout: 120000 
+        });
+      });
+      registrarLog('✅ Página de login cargada');
+    } catch (error) {
+      registrarLog(`❌ Error navegación inicial: ${error.message}`);
+      const buffer = await pagina.screenshot({ fullPage: true });
+      await ctx.replyWithPhoto({ source: buffer, caption: 'Error al cargar página inicial' });
+      throw error;
     }
 
+    await pagina.type('#username', process.env.WOM_USER);
+    await pagina.type('#password', process.env.WOM_PASS);
+    await esperaInteligente(pagina, async () => {
+      await pagina.click('#kc-login');
+    });
+    registrarLog('✅ Credenciales ingresadas');
 
-    await page.type('#username', process.env.WOM_USER);
-    await page.type('#password', process.env.WOM_PASS);
-    await Promise.all([
-      page.click('#kc-login'),
-      page.waitForNavigation({ waitUntil: 'networkidle2' }),
-    ]);
-
-
-    await page.waitForSelector('#Button_Opcion_Top_Fact_Tec', { visible: true });
-    await page.click('#Button_Opcion_Top_Fact_Tec');
+    await encontrarElemento(pagina, ['#Button_Opcion_Top_Fact_Tec'], 10000);
+    await esperaInteligente(pagina, async () => {
+      await pagina.click('#Button_Opcion_Top_Fact_Tec');
+    });
     await ctx.reply('✅ Entramos a la sección "Factibilidad Técnica"...');
 
-
-    await page.waitForSelector('input#direccion', { visible: true });
-    const inputDireccion = await page.$('input#direccion');
+    const inputDireccion = await encontrarElemento(pagina, ['input#direccion'], 8000);
     await inputDireccion.click({ clickCount: 3 });
     await inputDireccion.press('Backspace');
-    await page.waitForTimeout(500);
-
+    await pagina.waitForTimeout(500);
 
     const calleFormateada = region.trim().toUpperCase() === "LIBERTADOR BERNARDO O'HIGGINS"
-      ? calle.replace(/LIBERTADOR BERNARDO O['’]HIGGINS/gi, 'LIB GRAL BERNARDO O HIGGINS')
+      ? calle.replace(/LIBERTADOR BERNARDO O['']HIGGINS/gi, 'LIB GRAL BERNARDO O HIGGINS')
       : calle;
 
-
     await inputDireccion.type(`${calleFormateada} ${numero}`, { delay: 100 });
-    await page.waitForTimeout(2000);
+    await pagina.waitForTimeout(2000);
     await inputDireccion.press('Backspace');
-    await page.waitForTimeout(1500);
+    await pagina.waitForTimeout(1500);
 
-
-    const opcionesVisibles = await page.evaluate(() => {
+    const opcionesVisibles = await pagina.evaluate(() => {
       return Array.from(document.querySelectorAll('ul.opciones li')).map(el => el.textContent.trim()).filter(Boolean);
     });
 
-
-    let mensajeOpciones = '';
-    opcionesVisibles.forEach((opcion, index) => {
-      mensajeOpciones += `${index + 1}. ${opcion}\n`;
-    });
-    if (mensajeOpciones.length > 0) {
-      await ctx.reply(`📋 Opciones desplegadas por el sistema:\n${mensajeOpciones}`);
+    if (opcionesVisibles.length > 0) {
+      await ctx.reply(`📋 Opciones desplegadas por el sistema:\n${opcionesVisibles.map((o, i) => `${i+1}. ${o}`).join('\n')}`);
     } else {
       await ctx.reply('⚠️ No se detectaron opciones visibles en el desplegable.');
     }
 
-
-    const posiblesOpciones = await page.$x(`//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚ', 'abcdefghijklmnopqrstuvwxyzáéíóú'), '${(calleFormateada + ' ' + numero).toLowerCase()}')]`);
+    const posiblesOpciones = await pagina.$x(`//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚ', 'abcdefghijklmnopqrstuvwxyzáéíóú'), '${(calleFormateada + ' ' + numero).toLowerCase()}')]`);
     await ctx.reply(`🔍 Opciones encontradas: ${posiblesOpciones.length}`);
-
 
     let seleccionada = false;
     for (const opcion of posiblesOpciones) {
-      const texto = await page.evaluate(el => el.textContent.trim(), opcion);
+      const texto = await pagina.evaluate(el => el.textContent.trim(), opcion);
       if (texto.toUpperCase().includes(calle.toUpperCase()) && texto.toUpperCase().includes(numero.toUpperCase())) {
-        const box = await opcion.boundingBox();
-        if (box) {
-          await ctx.reply(`🟢 Dirección encontrada: ${texto}`);
-          await opcion.scrollIntoView();
-          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-          await page.waitForTimeout(1000);
-          seleccionada = true;
-          break;
-        }
-      }
-    }
-
-
-    const lupa = await page.$('label.input_icon--left.icono-lupa');
-    if (lupa) {
-      await ctx.reply('🔎 Confirmando la dirección con clic en la lupa...');
-      await lupa.click();
-      await page.waitForTimeout(2500);
-
-
-      try {
-        await page.waitForSelector('div.drop_down', { visible: true, timeout: 8000 });
-        const opcionesExtra = await page.evaluate(() => {
-          return Array.from(document.querySelectorAll('div.drop_down .item-content')).map(el => el.textContent.trim()).filter(Boolean);
+        await ctx.reply(`🟢 Dirección encontrada: ${texto}`);
+        await opcion.scrollIntoView();
+        await esperaInteligente(pagina, async () => {
+          await opcion.click();
         });
-
-
-        if (opcionesExtra.length > 0) {
-          console.log('📦 Opciones torre/depto disponibles:');
-          opcionesExtra.forEach((texto, idx) => {
-            console.log(`${idx + 1}. ${texto}`);
-          });
-        } else {
-          console.log('⚠️ No se detectaron opciones adicionales tras la lupa.');
-        }
-      } catch (e) {
-        console.warn('⌛ Panel de opciones de torre/depto no apareció a tiempo.');
-        await ctx.reply('⚠️ No se detectó el segundo panel después de la lupa.');
-      }
-    }
-
-
-    const opcionesFinales = await page.$$('div.drop_down .item-content');
-    let opcionSeleccionadaFinal = false;
-
-
-    const etiquetasTorre = ['TORRE', 'BLOCK', 'EDIFICIO'];
-    const torreLetra = torre?.split(' ').pop()?.toUpperCase();
-    const deptoNumero = depto;
-
-
-    for (const opcion of opcionesFinales) {
-      const texto = await page.evaluate(el => el.textContent.trim(), opcion);
-      if (!texto) continue;
-
-
-      const textoUpper = texto.toUpperCase();
-
-
-      // --- MODIFICACIÓN AQUÍ: Lógica de coincideTorre más precisa usando Regex ---
-      let coincideTorre = false;
-      if (torre && torreLetra) {
-          // Construir la expresión regular para buscar la palabra completa "TORRE X", "BLOCK X", "EDIFICIO X"
-          // '\\b' es un límite de palabra. 'i' hace la regex insensible a mayúsculas/minúsculas,
-          // aunque ya estamos usando textoUpper.
-          const towerRegex = new RegExp(`\\bTORRE\\s*${torreLetra}\\b|\\bBLOCK\\s*${torreLetra}\\b|\\bEDIFICIO\\s*${torreLetra}\\b`, 'i');
-         
-          // --- NUEVOS DEBUG LOGS PARA COMPARACIÓN DE TORRE ---
-          log(`DEBUG: Comparando Torre:`);
-          log(`DEBUG:   textoUpper (opción): "${textoUpper}"`);
-          log(`DEBUG:   torreLetra (input): "${torreLetra}"`);
-          log(`DEBUG:   Regex usada: ${towerRegex}`);
-         
-          const regexTestResult = towerRegex.test(textoUpper); // Almacenar el resultado del test
-          log(`DEBUG:   Resultado del test Regex para Torre: ${regexTestResult}`); // Nuevo log
-          // --- FIN NUEVOS DEBUG LOGS ---
-
-
-          if (regexTestResult) { // Usar el resultado almacenado
-              coincideTorre = true;
-          }
-      } else if (!torre) {
-          // Si no se proporcionó torre, se considera que coincide con cualquier opción de torre
-          coincideTorre = true;
-      }
-      // --- FIN MODIFICACIÓN ---
-
-
-      const coincideDepto = depto && textoUpper.includes(deptoNumero.toUpperCase());
-
-
-      log(`DEBUG: Evaluando opción (Torre/Depto): "${texto}"`);
-      log(`DEBUG: Coincide Torre (input "${torre}", letra "${torreLetra}"): ${coincideTorre}`);
-      log(`DEBUG: Coincide Depto (input "${deptoNumero}"): ${coincideDepto}`);
-
-
-      if ((torre && !coincideTorre) || (depto && !coincideDepto)) {
-        log(`DEBUG: Opción "${texto}" no coincide con los criterios de Torre/Depto. Saltando.`);
-        continue;
-      }
-
-
-      await opcion.scrollIntoView();
-      log(`DEBUG: Elemento "${texto}" desplazado a la vista.`);
-
-
-      const box = await opcion.boundingBox();
-      if (box) {
-        await ctx.reply(`🏢 Seleccionando torre/depto: ${texto}`);
-       
-        await opcion.click();
-        log(`DEBUG: Intento de clic estándar en opción: "${texto}"`);
-
-
-        await page.waitForTimeout(1500);
-
-
-        try {
-          await page.waitForSelector('div.drop_down', { hidden: true, timeout: 5000 });
-          log('DEBUG: Modal de selección de dirección ha desaparecido.');
-        } catch (waitError) {
-          log(`WARNING: Modal de selección de dirección NO desapareció después del clic. Detalles: ${waitError.message}`);
-          await page.evaluate(el => el.click(), opcion);
-          log(`DEBUG: Intento de clic con JavaScript en opción: "${texto}"`);
-          await page.waitForTimeout(1500);
-          try {
-             await page.waitForSelector('div.drop_down', { hidden: true, timeout: 5000 });
-             log('DEBUG: Modal de selección de dirección ha desaparecido después del clic JS.');
-          } catch (jsClickWaitError) {
-              log(`WARNING: Modal de selección de dirección NO desapareció incluso con clic JS. Detalles: ${jsClickWaitError.message}`);
-          }
-        }
-
-
-        opcionSeleccionadaFinal = true;
-        log(`✅ Torre/Depto "${texto}" seleccionada.`);
+        seleccionada = true;
         break;
       }
     }
 
+    if (!seleccionada) {
+      throw new Error('No se pudo seleccionar la dirección');
+    }
 
-    if (!opcionSeleccionadaFinal && opcionesFinales.length > 0) {
-      const primera = opcionesFinales[0];
-      const box = await primera.boundingBox();
-      if (box) {
-        const textoPrimeraOpcion = await page.evaluate(el => el.textContent.trim(), primera);
-        await ctx.reply(`ℹ️ No se encontró una coincidencia exacta para Torre/Depto. Seleccionando primera opción visible por defecto: ${textoPrimeraOpcion}`);
-       
-        await primera.scrollIntoView();
-        await primera.click();
-        await page.waitForTimeout(1500);
+    const lupa = await encontrarElemento(pagina, [
+      'label.input_icon--left.icono-lupa',
+      'button[aria-label="Buscar"]',
+      'div.search-icon'
+    ], 8000);
 
+    await ctx.reply('🔎 Confirmando la dirección con clic en la lupa...');
+    await esperaInteligente(pagina, async () => {
+      await lupa.click();
+    });
 
-        try {
-          await page.waitForSelector('div.drop_down', { hidden: true, timeout: 5000 });
-          log('DEBUG: Modal de selección de dirección ha desaparecido (primera opción).');
-        } catch (waitError) {
-          log(`WARNING: Modal de selección de dirección NO desapareció después de seleccionar la primera opción. Detalles: ${waitError.message}`);
+    if (torre || depto) {
+      try {
+        const panelTorreDepto = await encontrarElemento(pagina, [
+          'div.drop_down',
+          'div.torre-depto-panel',
+          'div.extra-options'
+        ], 10000);
+
+        const opcionesExtra = await pagina.evaluate(() => {
+          return Array.from(document.querySelectorAll('div.drop_down .item-content, div.torre-depto-panel div.option')).map(el => el.textContent.trim()).filter(Boolean);
+        });
+
+        if (opcionesExtra.length > 0) {
+          registrarLog('Opciones torre/depto disponibles:');
+          opcionesExtra.forEach((texto, idx) => registrarLog(`${idx + 1}. ${texto}`));
         }
 
+        const torreLetra = torre?.split(' ').pop()?.toUpperCase();
+        const deptoNumero = depto;
 
-        log(`✅ Seleccionada la primera opción por defecto: "${textoPrimeraOpcion}".`);
+        for (const opcion of await pagina.$$('div.drop_down .item-content, div.torre-depto-panel div.option')) {
+          const texto = await pagina.evaluate(el => el.textContent.trim(), opcion);
+          const textoUpper = texto.toUpperCase();
+
+          const coincideTorre = torreLetra 
+            ? new RegExp(`\\bTORRE\\s*${torreLetra}\\b|\\bBLOCK\\s*${torreLetra}\\b|\\bEDIFICIO\\s*${torreLetra}\\b`, 'i').test(textoUpper)
+            : true;
+
+          const coincideDepto = deptoNumero 
+            ? new RegExp(`\\bDEPTO\\s*${deptoNumero}\\b|\\bDEPARTAMENTO\\s*${deptoNumero}\\b`, 'i').test(textoUpper)
+            : true;
+
+          if ((!torreLetra || coincideTorre) && (!deptoNumero || coincideDepto)) {
+            await ctx.reply(`🏢 Seleccionando torre/depto: ${texto}`);
+            await esperaInteligente(pagina, async () => {
+              await opcion.click();
+            });
+            break;
+          }
+        }
+      } catch (e) {
+        registrarLog(`⚠️ Panel de torre/depto no apareció: ${e.message}`);
       }
-    } else if (!opcionSeleccionadaFinal && opcionesFinales.length === 0) {
-      await ctx.reply('❌ No se encontraron opciones de torre/depto para seleccionar.');
-      log('❌ No se encontraron opciones de torre/depto para seleccionar.');
     }
 
-
-    try {
-      await page.waitForSelector('section.modal_cnt.container-row', { visible: true, timeout: 15000 });
-      const modal = await page.$('section.modal_cnt.container-row');
-      const buffer = await modal.screenshot();
-      await ctx.replyWithPhoto({ source: buffer });
-      await ctx.reply('📸 Captura del resultado tomada correctamente.');
-      log('✅ Captura del modal de resultado tomada.');
-    } catch (e) {
-      log('⚠️ Modal de resultado no detectado o no apareció a tiempo. Se tomará pantalla completa.');
-      console.error('Error al esperar o tomar captura del modal de resultado:', e);
-      const buffer = await tomarCapturaBuffer(page);
+    const resultadoModal = await manejarModalResultados(pagina, ctx);
+    if (!resultadoModal) {
+      await ctx.reply('⚠️ No se pudo obtener el modal de resultados, mostrando captura completa...');
+      const buffer = await pagina.screenshot({ fullPage: true });
       await ctx.replyWithPhoto({ source: buffer });
     }
 
+    await ctx.reply('✅ Proceso completado');
 
-  } catch (e) {
-    console.error('❌ Error general:', e);
-    await ctx.reply('⚠️ Error inesperado. Intenta nuevamente o revisa los datos.');
+  } catch (error) {
+    registrarLog(`❌ Error general: ${error.message}`);
+    await ctx.reply(`⚠️ Error: ${error.message}`);
+    if (navegador) {
+      const buffer = await pagina.screenshot({ fullPage: true });
+      await ctx.replyWithPhoto({ source: buffer, caption: 'Estado al ocurrir el error' });
+    }
   } finally {
-    if (browser) await browser.close();
+    if (navegador) await navegador.close();
   }
 }
 
-
-module.exports = { bot2 }
+module.exports = { bot2 };
