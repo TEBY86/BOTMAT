@@ -4,80 +4,37 @@ require('dotenv').config();
 
 puppeteer.use(StealthPlugin());
 
-// Configuración centralizada
-const config = {
-  loginUrl: process.env.WOM_LOGIN_URL || 'https://sso-ocp4-sr-amp.apps.sr-ocp.wom.cl/auth/realms/customer-care/protocol/openid-connect/auth?client_id=e7c0d592&redirect_uri=https%3A%2F%2Fcustomercareapplicationservice.ose.wom.cl%2Fwomac%2Flogin&state=d213955b-7112-4036-b60d-a4b79940cde5&response_mode=fragment&response_type=code&scope=openid&nonce=43e8fbde-b45e-46db-843f-4482bbed44b2',
-  selectors: {
-    login: {
-      username: '#username',
-      password: '#password',
-      loginButton: '#kc-login'
-    },
-    factibilidad: {
-      button: '#Button_Opcion_Top_Fact_Tec',
-      input: 'input#direccion',
-      search: ['label.input_icon--left.icono-lupa', 'button[aria-label="Buscar"]', 'div.search-icon'],
-      modal: [
-        'section.modal_cnt.container-row',
-        'div[role="dialog"]',
-        'div.modal-content',
-        'div.result-container'
-      ],
-      torreDepto: ['div.drop_down', 'div.torre-depto-panel', 'div.extra-options'],
-      torreDeptoOptions: ['div.drop_down .item-content', 'div.torre-depto-panel div.option']
-    },
-    timeouts: {
-      base: 5000,
-      navigation: 120000,
-      modal: 15000,
-      torreDepto: 10000,
-      multiplier: parseFloat(process.env.TIMEOUT_MULTIPLIER) || 1
-    }
-  }
-};
-
 function contieneDepartamento(texto) {
   const regex = /\b(TORRE|DEPTO|PISO|CASA|BLOCK|EDIFICIO|[A-F]|\d{1,3})\b/i;
   return regex.test(texto);
 }
 
-async function encontrarElemento(page, selectores, timeout = config.timeouts.base, retries = 2) {
+async function encontrarElemento(page, selectores, timeout = 5000) {
   if (!page) throw new Error('Página no definida');
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    for (const selector of selectores) {
-      try {
-        const elemento = await page.waitForSelector(selector, { visible: true, timeout });
-        if (elemento) return elemento;
-      } catch (e) {
-        if (attempt === retries) continue;
-        await page.waitForTimeout(1000);
-      }
+  for (const selector of selectores) {
+    try {
+      const elemento = await page.waitForSelector(selector, { visible: true, timeout });
+      if (elemento) return elemento;
+    } catch (e) {
+      continue;
     }
   }
   throw new Error(`No se pudo encontrar el elemento con selectores: ${selectores.join(', ')}`);
 }
 
-async function esperaInteligente(page, accion = null, timeout = config.timeouts.base) {
+async function esperaInteligente(page, accion = null, timeout = 10000) {
   if (!page) throw new Error('Página no definida');
   if (accion) {
-    try {
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: ['networkidle2', 'domcontentloaded'], timeout }),
-        page.waitForFunction(() => document.readyState === 'complete', { timeout }),
-        accion()
-      ]);
-    } catch (error) {
-      console.warn(`[${new Date().toISOString()}] Advertencia en esperaInteligente: ${error.message}`);
-    }
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: ['networkidle2', 'domcontentloaded'], timeout }),
+      page.waitForFunction(() => document.readyState === 'complete', { timeout }),
+      accion()
+    ]).catch(() => {});
   }
   
-  try {
-    await page.waitForFunction(() => {
-      return !document.querySelector('.loading, .spinner, [aria-busy="true"]');
-    }, { timeout });
-  } catch (error) {
-    console.warn(`[${new Date().toISOString()}] Advertencia al verificar carga completa: ${error.message}`);
-  }
+  await page.waitForFunction(() => {
+    return !document.querySelector('.loading, .spinner, [aria-busy="true"]');
+  }, { timeout });
 }
 
 async function manejarModalResultados(page, ctx) {
@@ -92,50 +49,28 @@ async function manejarModalResultados(page, ctx) {
       return Array.from(loaders).every(loader => loader.style.display === 'none');
     }, { timeout: 10000 });
 
-    const modal = await encontrarElemento(page, config.selectors.factibilidad.modal, config.timeouts.modal);
-    const buffer = await modal.screenshot({ clip: await modal.boundingBox() });
+    const modal = await encontrarElemento(page, [
+      'section.modal_cnt.container-row',
+      'div[role="dialog"]',
+      'div.modal-content',
+      'div.result-container'
+    ], 15000);
+
+    const buffer = await modal.screenshot({
+      clip: await modal.boundingBox()
+    });
+    
     await ctx.replyWithPhoto({ source: buffer });
     return true;
   } catch (error) {
     log(`Error al manejar modal: ${error.message}`);
-    try {
-      const buffer = await page.screenshot({ fullPage: true });
-      await ctx.replyWithPhoto({ source: buffer, caption: 'Error al capturar modal, screenshot de página completa' });
-    } catch (fallbackError) {
-      log(`Error en fallback: ${fallbackError.message}`);
-      await ctx.reply('⚠️ Error al capturar resultados');
-    }
     return false;
-  }
-}
-
-async function navigateToLogin(page, url, ctx, retries = 2) {
-  const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
-  if (!page || !ctx) {
-    log('Error: page o ctx no definidos');
-    throw new Error('Página o contexto no definidos');
-  }
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      await esperaInteligente(page, async () => {
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: config.timeouts.navigation });
-      }, config.timeouts.base * config.timeouts.multiplier);
-      log('✅ Página de login cargada');
-      return;
-    } catch (error) {
-      log(`❌ Intento ${attempt} fallido: ${error.message}`);
-      if (attempt === retries) {
-        const buffer = await page.screenshot({ fullPage: true });
-        await ctx.replyWithPhoto({ source: buffer, caption: 'Error al cargar página inicial' });
-        throw error;
-      }
-      await page.waitForTimeout(2000);
-    }
   }
 }
 
 async function bot2(ctx, input) {
   const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
+  
   if (!ctx) {
     log('Error: ctx no definido');
     throw new Error('Contexto de Telegram (ctx) no definido');
@@ -148,8 +83,7 @@ async function bot2(ctx, input) {
   log(`Torre: "${torre}", Depto: "${depto}"`);
 
   if (!region || !comuna || !calle || !numero) {
-    await ctx.reply('❗ Formato incorrecto. Usa: /factibilidad Región, Comuna, Calle, Número[, Torre[, Depto]]');
-    return;
+    return ctx.reply('❗ Formato incorrecto. Usa: /factibilidad Región, Comuna, Calle, Número[, Torre[, Depto]]');
   }
 
   await ctx.reply('🔍 Consultando factibilidad técnica en MAT de WOM, un momento...');
@@ -157,8 +91,9 @@ async function bot2(ctx, input) {
   let browser;
   let page;
   try {
+    const modoHeadless = 'new';
     browser = await puppeteer.launch({
-      headless: 'new',
+      headless: modoHeadless,
       slowMo: 20,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
       defaultViewport: { width: 1366, height: 900 },
@@ -171,31 +106,47 @@ async function bot2(ctx, input) {
     page.on('pageerror', error => log(`[ERROR] ${error.message}`));
     page.on('response', response => log(`[RESPONSE] ${response.status()} ${response.url()}`));
 
-    await navigateToLogin(page, config.loginUrl, ctx);
-    await page.type(config.selectors.login.username, process.env.WOM_USER || '');
-    await page.type(config.selectors.login.password, process.env.WOM_PASS || '');
+    try {
+      await esperaInteligente(page, async () => {
+        await page.goto('https://sso-ocp4-sr-amp.apps.sr-ocp.wom.cl/auth/realms/customer-care/protocol/openid-connect/auth?client_id=e7c0d592&redirect_uri=https%3A%2F%2Fcustomercareapplicationservice.ose.wom.cl%2Fwomac%2Flogin&state=d213955b-7112-4036-b60d-a4b79940cde5&response_mode=fragment&response_type=code&scope=openid&nonce=43e8fbde-b45e-46db-843f-4482bbed44b2/', {
+          waitUntil: 'networkidle2',
+          timeout: 120000
+        });
+      });
+      log('✅ Página de login cargada');
+    } catch (error) {
+      log(`❌ Error navegación inicial: ${error.message}`);
+      const buffer = await page.screenshot({ fullPage: true });
+      await ctx.replyWithPhoto({ source: buffer, caption: 'Error al cargar página inicial' });
+      throw error;
+    }
+
+    await page.type('#username', process.env.WOM_USER || '');
+    await page.type('#password', process.env.WOM_PASS || '');
     await esperaInteligente(page, async () => {
-      await page.click(config.selectors.login.loginButton);
-    }, config.timeouts.base * config.timeouts.multiplier);
+      await page.click('#kc-login');
+    });
     log('✅ Credenciales ingresadas');
 
-    await encontrarElemento(page, [config.selectors.factibilidad.button], config.timeouts.base * config.timeouts.multiplier);
+    await encontrarElemento(page, ['#Button_Opcion_Top_Fact_Tec'], 10000);
     await esperaInteligente(page, async () => {
-      await page.click(config.selectors.factibilidad.button);
-    }, config.timeouts.base * config.timeouts.multiplier);
+      await page.click('#Button_Opcion_Top_Fact_Tec');
+    });
     await ctx.reply('✅ Entramos a la sección "Factibilidad Técnica"...');
 
-    const inputDireccion = await encontrarElemento(page, [config.selectors.factibilidad.input], config.timeouts.base * config.timeouts.multiplier);
+    const inputDireccion = await encontrarElemento(page, ['input#direccion'], 8000);
     await inputDireccion.click({ clickCount: 3 });
     await inputDireccion.press('Backspace');
-    await page.waitForFunction(() => !document.querySelector('input[aria-busy="true"]'), { timeout: config.timeouts.base });
+    await page.waitForTimeout(500);
 
     const calleFormateada = region.trim().toUpperCase() === "LIBERTADOR BERNARDO O'HIGGINS"
-      ? calle.replace(/LIBERTADOR BERNARDO O['']HIGGINS/gi, 'LIB GRAL BERNARDO O HIGGINS')
+      ? calle.replace(/LIBERTADOR BERNARDO O['’]HIGGINS/gi, 'LIB GRAL BERNARDO O HIGGINS')
       : calle;
 
     await inputDireccion.type(`${calleFormateada} ${numero}`, { delay: 100 });
-    await page.waitForFunction(() => document.querySelector('ul.opciones li'), { timeout: config.timeouts.base });
+    await page.waitForTimeout(2000);
+    await inputDireccion.press('Backspace');
+    await page.waitForTimeout(1500);
 
     // Manejo de opciones de dirección
     const opcionesVisibles = await page.evaluate(() => {
@@ -220,7 +171,7 @@ async function bot2(ctx, input) {
         await opcion.scrollIntoView();
         await esperaInteligente(page, async () => {
           await opcion.click();
-        }, config.timeouts.base * config.timeouts.multiplier);
+        });
         seleccionada = true;
         break;
       }
@@ -244,19 +195,25 @@ async function bot2(ctx, input) {
     }
 
     // Confirmación con lupa
-    const lupa = await encontrarElemento(page, config.selectors.factibilidad.search, 8000);
+    const lupa = await encontrarElemento(page, [
+      'label.input_icon--left.icono-lupa',
+      'button[aria-label="Buscar"]',
+      'div.search-icon'
+    ], 8000);
+
     await ctx.reply('🔎 Confirmando la dirección con clic en la lupa...');
     await esperaInteligente(page, async () => {
       await lupa.click();
-    }, config.timeouts.base * config.timeouts.multiplier);
+    });
 
     // Manejo de torre/depto si existen
     if (torre || depto) {
       try {
-        const panelTorreDepto = await encontrarElemento(page, config.selectors.factibilidad.torreDepto, config.timeouts.torreDepto);
-        await page.evaluate((panel) => {
-          panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, panelTorreDepto);
+        const panelTorreDepto = await encontrarElemento(page, [
+          'div.drop_down',
+          'div.torre-depto-panel',
+          'div.extra-options'
+        ], 10000);
 
         const opcionesExtra = await page.evaluate(() => {
           return Array.from(document.querySelectorAll('div.drop_down .item-content, div.torre-depto-panel div.option')).map(el => el.textContent.trim()).filter(Boolean);
@@ -274,7 +231,7 @@ async function bot2(ctx, input) {
         const deptoNumero = depto;
         let torreDeptoSeleccionada = false;
 
-        for (const opcion of await page.$$(config.selectors.factibilidad.torreDeptoOptions.join(', '))) {
+        for (const opcion of await page.$$('div.drop_down .item-content, div.torre-depto-panel div.option')) {
           const texto = await page.evaluate(el => el.textContent.trim(), opcion);
           const textoUpper = texto.toUpperCase();
 
@@ -290,14 +247,14 @@ async function bot2(ctx, input) {
             await ctx.reply(`🏢 Seleccionando torre/depto: ${texto}`);
             await esperaInteligente(page, async () => {
               await opcion.click();
-            }, config.timeouts.base * config.timeouts.multiplier);
+            });
             torreDeptoSeleccionada = true;
             break;
           }
         }
 
         if (!torreDeptoSeleccionada && opcionesExtra.length > 0) {
-          const primeraOpcion = await page.$(config.selectors.factibilidad.torreDeptoOptions.join(', '));
+          const primeraOpcion = await page.$('div.drop_down .item-content, div.torre-depto-panel div.option');
           if (primeraOpcion) {
             const texto = await page.evaluate(el => el.textContent.trim(), primeraOpcion);
             if (contieneDepartamento(texto)) {
@@ -329,16 +286,12 @@ async function bot2(ctx, input) {
 
     await ctx.reply('✅ Proceso completado');
   } catch (error) {
-    log(`Error en bot2: ${error.message}`);
+    log(`❌ Error general: ${error.message}`);
+    await ctx.reply(`⚠️ Error: ${error.message}`);
     if (page) {
-      try {
-        const buffer = await page.screenshot({ fullPage: true });
-        await ctx.replyWithPhoto({ source: buffer, caption: 'Estado al ocurrir el error' });
-      } catch (screenshotError) {
-        log(`Error al capturar screenshot: ${screenshotError.message}`);
-      }
+      const buffer = await page.screenshot({ fullPage: true });
+      await ctx.replyWithPhoto({ source: buffer, caption: 'Estado al ocurrir el error' });
     }
-    await ctx.reply(`❌ Error: ${error.message}`);
   } finally {
     if (browser) await browser.close();
   }
