@@ -31,7 +31,7 @@ const config = {
       navigation: 120000,
       modal: 15000,
       torreDepto: 10000,
-      multiplier: process.env.TIMEOUT_MULTIPLIER || 1
+      multiplier: parseFloat(process.env.TIMEOUT_MULTIPLIER) || 1
     }
   }
 };
@@ -42,6 +42,7 @@ function contieneDepartamento(texto) {
 }
 
 async function encontrarElemento(page, selectores, timeout = config.timeouts.base, retries = 2) {
+  if (!page) throw new Error('Página no definida');
   for (let attempt = 1; attempt <= retries; attempt++) {
     for (const selector of selectores) {
       try {
@@ -57,6 +58,7 @@ async function encontrarElemento(page, selectores, timeout = config.timeouts.bas
 }
 
 async function esperaInteligente(page, accion = null, timeout = config.timeouts.base) {
+  if (!page) throw new Error('Página no definida');
   if (accion) {
     try {
       await Promise.all([
@@ -65,7 +67,7 @@ async function esperaInteligente(page, accion = null, timeout = config.timeouts.
         accion()
       ]);
     } catch (error) {
-      console.warn(`Advertencia en esperaInteligente: ${error.message}`);
+      console.warn(`[${new Date().toISOString()}] Advertencia en esperaInteligente: ${error.message}`);
     }
   }
   
@@ -74,12 +76,16 @@ async function esperaInteligente(page, accion = null, timeout = config.timeouts.
       return !document.querySelector('.loading, .spinner, [aria-busy="true"]');
     }, { timeout });
   } catch (error) {
-    console.warn(`Advertencia al verificar carga completa: ${error.message}`);
+    console.warn(`[${new Date().toISOString()}] Advertencia al verificar carga completa: ${error.message}`);
   }
 }
 
 async function manejarModalResultados(page, ctx) {
   const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
+  if (!page || !ctx) {
+    log('Error: page o ctx no definidos');
+    return false;
+  }
   try {
     await page.waitForFunction(() => {
       const loaders = document.querySelectorAll('.loader, .spinner, .loading');
@@ -103,8 +109,12 @@ async function manejarModalResultados(page, ctx) {
   }
 }
 
-async function navigateToLogin(page, url, retries = 2) {
+async function navigateToLogin(page, url, ctx, retries = 2) {
   const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
+  if (!page || !ctx) {
+    log('Error: page o ctx no definidos');
+    throw new Error('Página o contexto no definidos');
+  }
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       await esperaInteligente(page, async () => {
@@ -126,6 +136,11 @@ async function navigateToLogin(page, url, retries = 2) {
 
 async function bot2(ctx, input) {
   const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
+  if (!ctx) {
+    log('Error: ctx no definido');
+    throw new Error('Contexto de Telegram (ctx) no definido');
+  }
+
   const [region, comuna, calle, numero, torre, depto] = input.split(',').map(x => x.trim());
 
   log(`Input recibido: "${input}"`);
@@ -133,12 +148,14 @@ async function bot2(ctx, input) {
   log(`Torre: "${torre}", Depto: "${depto}"`);
 
   if (!region || !comuna || !calle || !numero) {
-    return ctx.reply('❗ Formato incorrecto. Usa: /factibilidad Región, Comuna, Calle, Número[, Torre[, Depto]]');
+    await ctx.reply('❗ Formato incorrecto. Usa: /factibilidad Región, Comuna, Calle, Número[, Torre[, Depto]]');
+    return;
   }
 
-  ctx.reply('🔍 Consultando factibilidad técnica en MAT de WOM, un momento...');
+  await ctx.reply('🔍 Consultando factibilidad técnica en MAT de WOM, un momento...');
 
   let browser;
+  let page;
   try {
     browser = await puppeteer.launch({
       headless: 'new',
@@ -147,16 +164,16 @@ async function bot2(ctx, input) {
       defaultViewport: { width: 1366, height: 900 },
     });
 
-    const page = await browser.newPage();
+    page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
     page.on('console', msg => log(`[CONSOLE] ${msg.text()}`));
     page.on('pageerror', error => log(`[ERROR] ${error.message}`));
     page.on('response', response => log(`[RESPONSE] ${response.status()} ${response.url()}`));
 
-    await navigateToLogin(page, config.loginUrl);
-    await page.type(config.selectors.login.username, process.env.WOM_USER);
-    await page.type(config.selectors.login.password, process.env.WOM_PASS);
+    await navigateToLogin(page, config.loginUrl, ctx);
+    await page.type(config.selectors.login.username, process.env.WOM_USER || '');
+    await page.type(config.selectors.login.password, process.env.WOM_PASS || '');
     await esperaInteligente(page, async () => {
       await page.click(config.selectors.login.loginButton);
     }, config.timeouts.base * config.timeouts.multiplier);
@@ -313,11 +330,13 @@ async function bot2(ctx, input) {
     await ctx.reply('✅ Proceso completado');
   } catch (error) {
     log(`Error en bot2: ${error.message}`);
-    try {
-      const buffer = await page.screenshot({ fullPage: true });
-      await ctx.replyWithPhoto({ source: buffer, caption: 'Estado al ocurrir el error' });
-    } catch (screenshotError) {
-      log(`Error al capturar screenshot: ${screenshotError.message}`);
+    if (page) {
+      try {
+        const buffer = await page.screenshot({ fullPage: true });
+        await ctx.replyWithPhoto({ source: buffer, caption: 'Estado al ocurrir el error' });
+      } catch (screenshotError) {
+        log(`Error al capturar screenshot: ${screenshotError.message}`);
+      }
     }
     await ctx.reply(`❌ Error: ${error.message}`);
   } finally {
