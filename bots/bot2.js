@@ -30,7 +30,7 @@ async function bot2(ctx, input) {
 
   try {
     browser = await puppeteer.launch({
-      headless: false,
+      headless: true,
       slowMo: 20,
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
       defaultViewport: { width: 1366, height: 900 },
