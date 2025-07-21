@@ -36,12 +36,12 @@ async function bot2(ctx, input) {
 
 
   async function tomarCapturaBuffer(page) {
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(2000);
     const lupa = await page.$('label.input_icon--left.icono-lupa');
     if (lupa) {
       await ctx.reply('🔎 Haciendo clic en la lupa para confirmar selección...');
       await lupa.click();
-      await page.waitForTimeout(4000);
+      await page.waitForTimeout(6000);
     }
     return await page.screenshot({ fullPage: true });
   }
