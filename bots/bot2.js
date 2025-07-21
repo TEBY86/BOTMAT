@@ -22,13 +22,17 @@ const config = {
         'div[role="dialog"]',
         'div.modal-content',
         'div.result-container'
-      ]
+      ],
+      torreDepto: ['div.drop_down', 'div.torre-depto-panel', 'div.extra-options'],
+      torreDeptoOptions: ['div.drop_down .item-content', 'div.torre-depto-panel div.option']
+    },
+    timeouts: {
+      base: 5000,
+      navigation: 120000,
+      modal: 15000,
+      torreDepto: 10000,
+      multiplier: process.env.TIMEOUT_MULTIPLIER || 1
     }
-  },
-  timeouts: {
-    base: 5000,
-    navigation: 120000,
-    multiplier: process.env.TIMEOUT_MULTIPLIER || 1
   }
 };
 
@@ -75,118 +79,27 @@ async function esperaInteligente(page, accion = null, timeout = config.timeouts.
 }
 
 async function manejarModalResultados(page, ctx) {
+  const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
   try {
     await page.waitForFunction(() => {
       const loaders = document.querySelectorAll('.loader, .spinner, .loading');
       return Array.from(loaders).every(loader => loader.style.display === 'none');
     }, { timeout: 10000 });
 
-    const modal = await encontrarElemento(page, config.selectors.factibilidad.modal, 15000);
+    const modal = await encontrarElemento(page, config.selectors.factibilidad.modal, config.timeouts.modal);
     const buffer = await modal.screenshot({ clip: await modal.boundingBox() });
     await ctx.replyWithPhoto({ source: buffer });
     return true;
   } catch (error) {
-    console.error('Error al manejar modal:', error);
+    log(`Error al manejar modal: ${error.message}`);
     try {
       const buffer = await page.screenshot({ fullPage: true });
       await ctx.replyWithPhoto({ source: buffer, caption: 'Error al capturar modal, screenshot de página completa' });
     } catch (fallbackError) {
-      console.error('Error en fallback:', fallbackError);
+      log(`Error en fallback: ${fallbackError.message}`);
       await ctx.reply('⚠️ Error al capturar resultados');
     }
     return false;
-  }
-}
-
-async function seleccionarTorreDepto(page, ctx, torre, depto) {
-  try {
-    const panel = await page.waitForSelector('div.drop_down, div.torre-depto-panel', {
-      visible: true,
-      timeout: 10000
-    });
-
-    await page.evaluate((panel) => {
-      panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, panel);
-
-    const opciones = await page.$$eval('div.drop_down .item-content, div.torre-depto-panel div.option', 
-      (elements, {torreBuscar, deptoBuscar}) => {
-        return elements.map(el => {
-          const text = el.textContent.trim().toUpperCase();
-          const rect = el.getBoundingClientRect();
-          const visible = (
-            rect.top >= 0 &&
-            rect.left >= 0 &&
-            rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
-            rect.right <= (window.innerWidth || document.documentElement.clientWidth)
-          );
-          
-          const matchTorre = torreBuscar 
-            ? text.includes(`TORRE ${torreBuscar}`) || 
-              text.includes(`BLOCK ${torreBuscar}`) || 
-              text.includes(`EDIFICIO ${torreBuscar}`)
-            : true;
-          
-          const matchDepto = deptoBuscar
-            ? text.includes(`DEPTO ${deptoBuscar}`) || 
-              text.includes(`DEPARTAMENTO ${deptoBuscar}`) || 
-              text.includes(`DTO ${deptoBuscar}`)
-            : true;
-
-          return {
-            element: el,
-            text: text,
-            visible: visible,
-            score: (matchTorre ? 2 : 0) + (matchDepto ? 2 : 0)
-          };
-        });
-      }, 
-      { 
-        torreBuscar: torre ? torre.split(' ').pop().toUpperCase() : null, 
-        deptoBuscar: depto ? depto.toString().toUpperCase() : null 
-      }
-    );
-
-    const opcionesVisibles = opciones.filter(op => op.visible)
-      .sort((a, b) => b.score - a.score);
-
-    if (opcionesVisibles.length === 0) {
-      throw new Error('No hay opciones visibles después del scroll');
-    }
-
-    const mejorOpcion = opcionesVisibles[0];
-    await ctx.reply(`✅ Seleccionando: ${mejorOpcion.text}`);
-
-    await page.evaluate((element) => {
-      element.scrollIntoView({ block: 'center' });
-      element.click();
-    }, mejorOpcion.element);
-
-    await page.waitForTimeout(2000);
-    return true;
-  } catch (error) {
-    console.error('Error en selección:', error);
-    await ctx.reply('⚠️ Error al seleccionar, intentando primera opción disponible');
-    
-    try {
-      const primeraOpcion = await page.$('div.drop_down .item-content, div.torre-depto-panel div.option');
-      if (primeraOpcion) {
-        const texto = await page.evaluate(el => el.textContent.trim(), primeraOpcion);
-        if (contieneDepartamento(texto)) {
-          await page.evaluate(el => el.click(), primeraOpcion);
-          await ctx.reply(`✅ Fallback: Seleccionada primera opción: ${texto}`);
-          await page.waitForTimeout(1000);
-          return true;
-        } else {
-          throw new Error('Primera opción no es válida');
-        }
-      }
-      throw new Error('No hay opciones disponibles');
-    } catch (fallbackError) {
-      console.error('Error en fallback:', fallbackError);
-      await ctx.reply('⚠️ No se pudo seleccionar ninguna opción automáticamente');
-      return false;
-    }
   }
 }
 
@@ -267,6 +180,7 @@ async function bot2(ctx, input) {
     await inputDireccion.type(`${calleFormateada} ${numero}`, { delay: 100 });
     await page.waitForFunction(() => document.querySelector('ul.opciones li'), { timeout: config.timeouts.base });
 
+    // Manejo de opciones de dirección
     const opcionesVisibles = await page.evaluate(() => {
       return Array.from(document.querySelectorAll('ul.opciones li')).map(el => el.textContent.trim()).filter(Boolean);
     });
@@ -277,6 +191,7 @@ async function bot2(ctx, input) {
       await ctx.reply('⚠️ No se detectaron opciones visibles en el desplegable.');
     }
 
+    // Selección de dirección
     const posiblesOpciones = await page.$x(`//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚ', 'abcdefghijklmnopqrstuvwxyzáéíóú'), '${(calleFormateada + ' ' + numero).toLowerCase()}')]`);
     await ctx.reply(`🔍 Opciones encontradas: ${posiblesOpciones.length}`);
 
@@ -295,22 +210,115 @@ async function bot2(ctx, input) {
     }
 
     if (!seleccionada) {
-      throw new Error('No se pudo seleccionar la dirección');
+      log('⚠️ No se encontró coincidencia exacta, intentando fallback con primera opción válida');
+      const opciones = await page.$$('ul.opciones li');
+      if (opciones.length > 0) {
+        const texto = await page.evaluate(el => el.textContent.trim(), opciones[0]);
+        if (contieneDepartamento(texto)) {
+          await ctx.reply(`⚠️ Fallback: Seleccionando primera opción: ${texto}`);
+          await page.evaluate(el => el.click(), opciones[0]);
+          seleccionada = true;
+        } else {
+          throw new Error('No se pudo seleccionar la dirección; primera opción no válida');
+        }
+      } else {
+        throw new Error('No se pudo seleccionar la dirección; no hay opciones disponibles');
+      }
     }
 
-    const lupa = await encontrarElemento(page, config.selectors.factibilidad.search, config.timeouts.base * config.timeouts.multiplier);
+    // Confirmación con lupa
+    const lupa = await encontrarElemento(page, config.selectors.factibilidad.search, 8000);
     await ctx.reply('🔎 Confirmando la dirección con clic en la lupa...');
     await esperaInteligente(page, async () => {
       await lupa.click();
     }, config.timeouts.base * config.timeouts.multiplier);
 
+    // Manejo de torre/depto si existen
     if (torre || depto) {
-      await seleccionarTorreDepto(page, ctx, torre, depto);
+      try {
+        const panelTorreDepto = await encontrarElemento(page, config.selectors.factibilidad.torreDepto, config.timeouts.torreDepto);
+        await page.evaluate((panel) => {
+          panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, panelTorreDepto);
+
+        const opcionesExtra = await page.evaluate(() => {
+          return Array.from(document.querySelectorAll('div.drop_down .item-content, div.torre-depto-panel div.option')).map(el => el.textContent.trim()).filter(Boolean);
+        });
+
+        if (opcionesExtra.length > 0) {
+          log('Opciones torre/depto disponibles:');
+          opcionesExtra.forEach((texto, idx) => log(`${idx + 1}. ${texto}`));
+          await ctx.reply(`📋 Opciones torre/depto:\n${opcionesExtra.map((o, i) => `${i+1}. ${o}`).join('\n')}`);
+        } else {
+          await ctx.reply('⚠️ No se detectaron opciones de torre/depto.');
+        }
+
+        const torreLetra = torre?.split(' ').pop()?.toUpperCase();
+        const deptoNumero = depto;
+        let torreDeptoSeleccionada = false;
+
+        for (const opcion of await page.$$(config.selectors.factibilidad.torreDeptoOptions.join(', '))) {
+          const texto = await page.evaluate(el => el.textContent.trim(), opcion);
+          const textoUpper = texto.toUpperCase();
+
+          const coincideTorre = torreLetra
+            ? new RegExp(`\\b(TORRE|BLOCK|EDIFICIO)\\s*${torreLetra}\\b`, 'i').test(textoUpper)
+            : true;
+
+          const coincideDepto = deptoNumero
+            ? new RegExp(`\\b(DEPTO|DEPARTAMENTO|DTO)\\s*${deptoNumero}\\b`, 'i').test(textoUpper)
+            : true;
+
+          if (coincideTorre && coincideDepto) {
+            await ctx.reply(`🏢 Seleccionando torre/depto: ${texto}`);
+            await esperaInteligente(page, async () => {
+              await opcion.click();
+            }, config.timeouts.base * config.timeouts.multiplier);
+            torreDeptoSeleccionada = true;
+            break;
+          }
+        }
+
+        if (!torreDeptoSeleccionada && opcionesExtra.length > 0) {
+          const primeraOpcion = await page.$(config.selectors.factibilidad.torreDeptoOptions.join(', '));
+          if (primeraOpcion) {
+            const texto = await page.evaluate(el => el.textContent.trim(), primeraOpcion);
+            if (contieneDepartamento(texto)) {
+              await ctx.reply(`⚠️ Fallback: Seleccionando primera opción de torre/depto: ${texto}`);
+              await page.evaluate(el => el.click(), primeraOpcion);
+              await page.waitForTimeout(1000);
+              torreDeptoSeleccionada = true;
+            }
+          }
+        }
+
+        if (!torreDeptoSeleccionada) {
+          log('⚠️ No se pudo seleccionar torre/depto');
+          await ctx.reply('⚠️ No se pudo seleccionar torre/depto automáticamente');
+        }
+      } catch (e) {
+        log(`⚠️ Panel de torre/depto no apareció: ${e.message}`);
+        await ctx.reply('⚠️ No se detectó panel de torre/depto');
+      }
     }
 
-    await manejarModalResultados(page, ctx);
+    // Manejo del modal de resultados
+    const resultadoModal = await manejarModalResultados(page, ctx);
+    if (!resultadoModal) {
+      await ctx.reply('⚠️ No se pudo obtener el modal de resultados, mostrando captura completa...');
+      const buffer = await page.screenshot({ fullPage: true });
+      await ctx.replyWithPhoto({ source: buffer });
+    }
+
+    await ctx.reply('✅ Proceso completado');
   } catch (error) {
-    console.error('Error en bot2:', error);
+    log(`Error en bot2: ${error.message}`);
+    try {
+      const buffer = await page.screenshot({ fullPage: true });
+      await ctx.replyWithPhoto({ source: buffer, caption: 'Estado al ocurrir el error' });
+    } catch (screenshotError) {
+      log(`Error al capturar screenshot: ${screenshotError.message}`);
+    }
     await ctx.reply(`❌ Error: ${error.message}`);
   } finally {
     if (browser) await browser.close();
